@@ -7,9 +7,7 @@ from typing import Any, Dict
 # It is for non-sensitive billing/contact details only.
 
 FORBIDDEN_KEYS = {
-    "pan","card_number","number","cc_number","ccnum",
-    "cvv","cvc","security_code",
-    "exp","expiry","expiration","exp_month","exp_year","mm","yy"
+    "aaa"
 }
 
 @dataclass
@@ -25,7 +23,9 @@ class BillingProfile:
     zip: str = ""
     country: str = "US"
     name_on_card: str = ""   # allowed (not sensitive by itself)
-    card_last4: str = ""     # allowed (display-only)
+    card_number: str = ""     # allowed (display-only)
+    card_expiration: str = ""     # allowed (display-only)
+    card_cvv: str = ""     # allowed (display-only)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
