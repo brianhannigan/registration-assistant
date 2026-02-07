@@ -7,13 +7,14 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QListWidget, QListWidgetItem, QGroupBox,
     QLabel, QSplitter, QTableWidget, QTableWidgetItem, QMessageBox,
     QAbstractItemView, QCheckBox, QScrollArea, QPlainTextEdit,
-    QTabWidget, QApplication
+    QTabWidget, QFileDialog, QApplication
 )
 
 from .models import RegistrantProfile
 from .selector_tools import domain_from_url, extract_selector_suggestions
 from .mapping_store import MappingStore
 from .playwright_worker import PlaywrightWorker
+from .billing_profile import BillingProfile, load_billing_profile, save_billing_profile
 
 APP_FIELDS = [
     ("registrant_name", "Registrant Name"),
@@ -24,6 +25,21 @@ APP_FIELDS = [
     ("city", "City"),
     ("state", "State"),
     ("zip", "ZIP"),
+]
+
+# SAFE billing/contact-only fields (no PAN/CVV/expiry)
+BILLING_FIELDS = [
+    ("billing_name", "Billing Name"),
+    ("email", "Billing Email"),
+    ("phone", "Billing Phone"),
+    ("address1", "Billing Address 1"),
+    ("address2", "Billing Address 2"),
+    ("city", "Billing City"),
+    ("state", "Billing State"),
+    ("zip", "Billing ZIP"),
+    ("country", "Billing Country"),
+    ("name_on_card", "Name on Card (non-sensitive)"),
+    ("card_last4", "Card Last4 (display-only)"),
 ]
 
 DEFAULT_SESSIONS = [
@@ -58,7 +74,7 @@ class MainWindowUI(QWidget):
         self._picker_timer.setInterval(200)
         self._picker_timer.timeout.connect(self.worker.poll_picker_once)
 
-        self._picker_mode: Optional[str] = None  # "field" | "session" | "continue"
+        self._picker_mode: Optional[str] = None  # "field" | "billing" | "session" | "continue"
         self._picker_target_key: Optional[str] = None
         self._picker_target_row: Optional[int] = None
 
@@ -107,7 +123,7 @@ class MainWindowUI(QWidget):
         self.detected_details.setFont(_mono_font())
         self.btn_copy_detected_selector = QPushButton("Copy Selected Selector")
 
-        # Mapping table
+        # Mapping table (registrant)
         self.map_table = QTableWidget(0, 4)
         self.map_table.setHorizontalHeaderLabels(["App Field", "CSS Selector", "Pick From Page", "Clear"])
         self.map_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -118,6 +134,18 @@ class MainWindowUI(QWidget):
         self.mapping_preview.setReadOnly(True)
         self.mapping_preview.setFont(_mono_font())
         self.btn_copy_mapping_selector = QPushButton("Copy Selector From Selected Row")
+
+        # Billing profile + mapping
+        self.billing_inputs: Dict[str, QLineEdit] = {}
+        self.gb_billing = QGroupBox("Billing Profile (Non-sensitive only)")
+        bf = QFormLayout(self.gb_billing)
+        for key, label in BILLING_FIELDS:
+            le = QLineEdit()
+            self.billing_inputs[key] = le
+            bf.addRow(label + ":", le)
+
+        self.btn_billing_load = QPushButton("Load Billing JSON")
+        self.btn_billing_save = QPushButton("Save Billing JSON")
 
         # HTML helper
         self.html_input = QPlainTextEdit()
@@ -166,7 +194,7 @@ class MainWindowUI(QWidget):
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_run)
 
-        # TAB 1: Run
+        # TAB: Run
         tab_run = QWidget()
         run_v = QVBoxLayout(tab_run)
         run_v.addWidget(self.gb_profile)
@@ -179,10 +207,10 @@ class MainWindowUI(QWidget):
         cont_row.addWidget(self.btn_copy_continue)
         run_v.addLayout(cont_row)
 
-        run_v.addWidget(QLabel("This tool stops before payment. Complete payment manually."))
+        run_v.addWidget(QLabel("Stops before payment. Complete payment manually."))
         run_v.addStretch(1)
 
-        # TAB 2: Detected
+        # TAB: Detected
         tab_detected = QWidget()
         det_v = QVBoxLayout(tab_detected)
         det_v.addWidget(QLabel("Detected elements (click one to see full selector/details):"))
@@ -204,7 +232,7 @@ class MainWindowUI(QWidget):
         split_det.setStretchFactor(1, 2)
         det_v.addWidget(split_det, 1)
 
-        # TAB 3: Field Mapping
+        # TAB: Field Mapping
         tab_map = QWidget()
         map_v = QVBoxLayout(tab_map)
 
@@ -226,12 +254,31 @@ class MainWindowUI(QWidget):
         split_map.setStretchFactor(1, 1)
         map_v.addWidget(split_map, 1)
 
-        # TAB 4: Sessions
+        # TAB: Billing
+        tab_billing = QWidget()
+        bill_v = QVBoxLayout(tab_billing)
+
+        warn = QLabel(
+            "Billing Profile is NON-SENSITIVE only.\n"
+            "It does NOT store card number (PAN), CVV/CVC, or expiry, and it does NOT submit payment."
+        )
+        warn.setWordWrap(True)
+        bill_v.addWidget(warn)
+
+        bill_v.addWidget(self.gb_billing)
+
+        bbtn = QHBoxLayout()
+        bbtn.addWidget(self.btn_billing_load)
+        bbtn.addWidget(self.btn_billing_save)
+        bbtn.addStretch(1)
+        bill_v.addLayout(bbtn)
+
+        # TAB: Sessions
         tab_sessions = QWidget()
         sess_v = QVBoxLayout(tab_sessions)
         sess_v.addWidget(self.sessions_box)
 
-        # TAB 5: HTML Helper
+        # TAB: HTML Helper
         tab_html = QWidget()
         html_v = QVBoxLayout(tab_html)
         html_v.addWidget(QLabel("Paste HTML snippet and analyze to suggest selectors:"))
@@ -260,7 +307,7 @@ class MainWindowUI(QWidget):
         split_html.setStretchFactor(1, 2)
         html_v.addWidget(split_html, 1)
 
-        # TAB 6: Logs
+        # TAB: Logs
         tab_logs = QWidget()
         logs_v = QVBoxLayout(tab_logs)
         logs_v.addWidget(self.log_box, 1)
@@ -269,6 +316,7 @@ class MainWindowUI(QWidget):
         self.tabs.addTab(tab_run, "Run")
         self.tabs.addTab(tab_detected, "Detected")
         self.tabs.addTab(tab_map, "Field Mapping")
+        self.tabs.addTab(tab_billing, "Billing")
         self.tabs.addTab(tab_sessions, "Sessions")
         self.tabs.addTab(tab_html, "HTML Helper")
         self.tabs.addTab(tab_logs, "Logs")
@@ -294,16 +342,18 @@ class MainWindowUI(QWidget):
         self.btn_copy_detected_selector.clicked.connect(self._copy_selected_detected_selector)
 
         self.map_table.dragEnterEvent = self._map_drag_enter
-        self.map_table.dropEvent = self._map_drop
+        self.map_table.dropEvent = lambda e: self._map_drop(e, self.map_table)
         self.map_table.itemSelectionChanged.connect(self._on_mapping_row_selected)
         self.btn_copy_mapping_selector.clicked.connect(self._copy_selector_from_selected_row)
+
+        self.btn_billing_load.clicked.connect(self._on_billing_load)
+        self.btn_billing_save.clicked.connect(self._on_billing_save)
 
         self.btn_html_analyze.clicked.connect(self._on_html_analyze)
         self.suggest_list.currentItemChanged.connect(self._on_suggest_selected)
         self.btn_copy_suggest_selector.clicked.connect(self._copy_selected_suggest_selector)
         self.btn_apply_suggest_to_selected_row.clicked.connect(self._apply_suggestion_to_selected_row)
 
-    # ---------------- Init tables/rows ----------------
     def _init_mapping_table(self):
         self.map_table.setRowCount(len(APP_FIELDS))
         for row, (key, label) in enumerate(APP_FIELDS):
@@ -322,9 +372,7 @@ class MainWindowUI(QWidget):
             self.map_table.setCellWidget(row, 2, btn_pick)
             self.map_table.setCellWidget(row, 3, btn_clear)
 
-        # Make selector column wide + stretch
         hdr = self.map_table.horizontalHeader()
-        hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(0, hdr.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, hdr.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, hdr.ResizeMode.ResizeToContents)
@@ -372,13 +420,11 @@ class MainWindowUI(QWidget):
 
         self.sessions_layout.addStretch(1)
 
-    # ---------------- Detected selection/details ----------------
     def _on_detected_selected(self, cur: QListWidgetItem, _prev: QListWidgetItem):
         if not cur:
             self.detected_details.setPlainText("")
             return
         f = cur.data(Qt.UserRole) or {}
-        # big readable detail dump
         lines = [
             f"tag: {f.get('tag','')}",
             f"type: {f.get('input_type','')}",
@@ -402,7 +448,6 @@ class MainWindowUI(QWidget):
         f = item.data(Qt.UserRole) or {}
         self._copy_text(f.get("selector", ""))
 
-    # ---------------- Mapping preview/copy ----------------
     def _on_mapping_row_selected(self):
         row = self.map_table.currentRow()
         if row < 0:
@@ -418,13 +463,12 @@ class MainWindowUI(QWidget):
             return
         self._copy_text(self.map_table.item(row, 1).text().strip())
 
-    # ---------------- Drag/drop mapping ----------------
     def _map_drag_enter(self, event):
         event.acceptProposedAction()
 
-    def _map_drop(self, event):
+    def _map_drop(self, event, table: QTableWidget):
         pos = event.position().toPoint()
-        row = self.map_table.rowAt(pos.y())
+        row = table.rowAt(pos.y())
         if row < 0:
             event.ignore()
             return
@@ -439,11 +483,10 @@ class MainWindowUI(QWidget):
             QMessageBox.warning(self, "No selector", "That element has no auto selector. Use Pick instead.")
             event.ignore()
             return
-        self.map_table.item(row, 1).setText(sel)
+        table.item(row, 1).setText(sel)
         self._log(f"Mapped row {row} -> {sel}")
         event.acceptProposedAction()
 
-    # ---------------- Picker flow ----------------
     def _start_picker_for_field(self, app_field_key: str, row: int):
         self._picker_mode = "field"
         self._picker_target_key = app_field_key
@@ -497,7 +540,57 @@ class MainWindowUI(QWidget):
         self.session_selector_labels[session_key].setText("(not mapped)")
         self._log(f"Cleared session mapping: {session_key}")
 
-    # ---------------- HTML helper ----------------
+    def _on_billing_load(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Billing Profile JSON", "", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            prof = load_billing_profile(path)
+            self._set_billing_form(prof)
+            self._log(f"Loaded billing profile: {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Load failed", str(e))
+
+    def _on_billing_save(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Billing Profile JSON", "billing_profile.json", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            prof = self._get_billing_form()
+            save_billing_profile(path, prof)
+            self._log(f"Saved billing profile: {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", str(e))
+
+    def _get_billing_form(self) -> BillingProfile:
+        return BillingProfile(
+            profile_name="Billing",
+            billing_name=self.billing_inputs["billing_name"].text().strip(),
+            email=self.billing_inputs["email"].text().strip(),
+            phone=self.billing_inputs["phone"].text().strip(),
+            address1=self.billing_inputs["address1"].text().strip(),
+            address2=self.billing_inputs["address2"].text().strip(),
+            city=self.billing_inputs["city"].text().strip(),
+            state=self.billing_inputs["state"].text().strip(),
+            zip=self.billing_inputs["zip"].text().strip(),
+            country=self.billing_inputs["country"].text().strip() or "US",
+            name_on_card=self.billing_inputs["name_on_card"].text().strip(),
+            card_last4=self.billing_inputs["card_last4"].text().strip(),
+        )
+
+    def _set_billing_form(self, bp: BillingProfile):
+        self.billing_inputs["billing_name"].setText(bp.billing_name)
+        self.billing_inputs["email"].setText(bp.email)
+        self.billing_inputs["phone"].setText(bp.phone)
+        self.billing_inputs["address1"].setText(bp.address1)
+        self.billing_inputs["address2"].setText(bp.address2)
+        self.billing_inputs["city"].setText(bp.city)
+        self.billing_inputs["state"].setText(bp.state)
+        self.billing_inputs["zip"].setText(bp.zip)
+        self.billing_inputs["country"].setText(bp.country)
+        self.billing_inputs["name_on_card"].setText(bp.name_on_card)
+        self.billing_inputs["card_last4"].setText(bp.card_last4)
+
     def _on_html_analyze(self):
         html = self.html_input.toPlainText()
         suggestions = extract_selector_suggestions(html)
@@ -543,9 +636,7 @@ class MainWindowUI(QWidget):
             return
         self.map_table.item(row, 1).setText(sel)
         self._log(f"Applied suggestion to row {row}: {sel}")
-        self.tabs.setCurrentIndex(2)  # jump to Field Mapping
 
-    # ---------------- Save/Load ----------------
     def _on_save(self):
         url = self.url_input.text().strip()
         if not url:
@@ -585,7 +676,6 @@ class MainWindowUI(QWidget):
         self.continue_selector_input.setText(data.get("continue_selector") or "")
         self._log(f"Loaded mapping for domain: {domain}")
 
-    # ---------------- Run ----------------
     def _on_run(self):
         url = self.url_input.text().strip()
         if not url:
@@ -631,7 +721,7 @@ class MainWindowUI(QWidget):
         self.worker.fill_and_click_safe(field_values, cont_sel)
         self._log("=== RUN END (manual from here) ===")
 
-        self.tabs.setCurrentIndex(5)  # jump to logs
+        self.tabs.setCurrentIndex(self.tabs.count() - 1)
 
     def _collect_field_bindings(self) -> Dict[str, str]:
         fb = {}
@@ -641,12 +731,10 @@ class MainWindowUI(QWidget):
                 fb[key] = sel
         return fb
 
-    # ---------------- Scan results ----------------
     def _on_scanned(self, fields: list):
         self.detected_fields = fields
         self.list_detected.clear()
         for f in fields:
-            selector = f.get("selector", "")
             hint = f.get("label_hint", "")
             tag = f.get("tag", "")
             name = f.get("name", "")
@@ -658,9 +746,8 @@ class MainWindowUI(QWidget):
             self.list_detected.addItem(item)
 
         self._log(f"Scanned {len(fields)} elements.")
-        self.tabs.setCurrentIndex(1)  # go to Detected
+        self.tabs.setCurrentIndex(1)
 
-    # ---------------- Misc helpers ----------------
     def _on_goto(self):
         url = self.url_input.text().strip()
         if not url:
@@ -679,4 +766,3 @@ class MainWindowUI(QWidget):
             return
         QApplication.clipboard().setText(s)
         self._log("Copied to clipboard.")
-
