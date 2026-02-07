@@ -579,7 +579,9 @@ class MainWindowUI(QWidget):
             zip=self.billing_inputs["zip"].text().strip(),
             country=self.billing_inputs["country"].text().strip() or "US",
             name_on_card=self.billing_inputs["name_on_card"].text().strip(),
-            card_last4=self.billing_inputs["card_last4"].text().strip(),
+            card_number=self.billing_inputs["card_number"].text().strip(),
+            card_expiration=self.billing_inputs["card_expiration"].text().strip(),
+            card_cvv=self.billing_inputs["card_cvv"].text().strip()
         )
 
     def _set_billing_form(self, bp: BillingProfile):
@@ -593,7 +595,9 @@ class MainWindowUI(QWidget):
         self.billing_inputs["zip"].setText(bp.zip)
         self.billing_inputs["country"].setText(bp.country)
         self.billing_inputs["name_on_card"].setText(bp.name_on_card)
-        self.billing_inputs["card_last4"].setText(bp.card_last4)
+        self.billing_inputs["card_number"].setText(bp.card_number)
+        self.billing_inputs["card_expiration"].setText(bp.card_expiration)
+        self.billing_inputs["card_cvv"].setText(bp.card_cvv)
 
     def _on_html_analyze(self):
         html = self.html_input.toPlainText()
