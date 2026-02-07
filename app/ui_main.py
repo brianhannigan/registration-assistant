@@ -39,15 +39,19 @@ BILLING_FIELDS = [
     ("zip", "Billing ZIP"),
     ("country", "Billing Country"),
     ("name_on_card", "Name on Card (non-sensitive)"),
-    ("card_last4", "Card Last4 (display-only)"),
+    ("card_number", "Card Number"),
+    ("card_expiration", "Card Expiration"),
+    ("card_cvv", "Card CVV"),
 ]
 
 DEFAULT_SESSIONS = [
-    ("week_1", "Week 1"),
-    ("week_2", "Week 2"),
-    ("week_3", "Week 3"),
-    ("session_a", "Session A"),
-    ("session_b", "Session B"),
+    ("session_1", "Session 1"),
+    ("session_2", "Session 2"),
+    ("session_3", "Session 3"),
+    ("session_4", "Session 4"),
+    ("session_5", "Session 5"),
+    ("session_6", "Session 6"),
+    ("session_7", "Session 7")
 ]
 
 def _mono_font():
